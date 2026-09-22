@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     watch: {
-      ignored: ["**/*.tmp", "**/*~tmp", "**/*.png.~*"],
+      ignored: ["**/*.tmp", "**/*~tmp", "**/*.png.~*", "**/build/**", "**/release/**"],
     },
   },
   test: {
