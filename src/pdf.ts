@@ -5,11 +5,11 @@ import {
   borderColorFor,
   containDest,
   coverSource,
+  pageSize,
   parseHex,
-  sheetLayout,
 } from "./geometry";
-import { allPageSlots } from "./layout";
-import type { GridDefinition, Photo, SheetSettings } from "./types";
+import { separatedSheets } from "./layout";
+import type { GridDefinition, Photo, PhotoGroup, SheetSettings, TitleSettings } from "./types";
 
 const DPI = 200;
 
@@ -20,6 +20,26 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("image"));
     image.src = url;
   });
+}
+
+async function loadPhoto(photo: Photo): Promise<HTMLImageElement> {
+  try {
+    return await loadImage(photo.url);
+  } catch {
+    return loadImage(photo.thumbUrl);
+  }
+}
+
+function downloadPdf(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function roundRectPath(
@@ -94,12 +114,29 @@ function drawCell(
   }
 }
 
+function drawTitle(
+  context: CanvasRenderingContext2D,
+  pageWidth: number,
+  topMm: number,
+  title: TitleSettings,
+  name: string,
+  ppm: number,
+  color: string,
+): void {
+  const size = title.sizeMm * ppm;
+  context.fillStyle = color;
+  context.font = `${title.weight} ${size}px "Plus Jakarta Sans", sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "top";
+  context.fillText(name, (pageWidth * ppm) / 2, topMm * ppm, pageWidth * ppm * 0.9);
+}
+
 async function renderPage(
-  slots: (Photo | null)[],
-  grid: GridDefinition,
+  placed: ReturnType<typeof separatedSheets<Photo>>[number],
   settings: SheetSettings,
+  title: TitleSettings,
 ): Promise<string> {
-  const { page, cells } = sheetLayout(grid, settings);
+  const page = pageSize(settings.orientation);
   const ppm = DPI / 25.4;
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(page.width * ppm));
@@ -110,14 +147,23 @@ async function renderPage(
   const { r, g, b } = parseHex(settings.background);
   context.fillStyle = `rgb(${r}, ${g}, ${b})`;
   context.fillRect(0, 0, canvas.width, canvas.height);
+  const color = borderColorFor(settings.background);
+  for (const item of placed.titles) {
+    drawTitle(context, page.width, item.top, { ...title, offsetMm: 0 }, item.name, ppm, color);
+  }
 
-  for (let index = 0; index < cells.length; index += 1) {
-    const photo = slots[index];
-    const cell = cells[index];
-    if (!photo || !cell) continue;
-    const image = await loadImage(photo.url);
+  for (const cell of placed.cells) {
+    const image = await loadPhoto(cell.photo);
     drawCell(context, image, cell, ppm, settings);
   }
+
+  context.fillStyle = color;
+  context.font = `600 ${3.2 * ppm}px "Plus Jakarta Sans", sans-serif`;
+  context.textAlign = "right";
+  context.textBaseline = "bottom";
+  context.globalAlpha = 0.72;
+  context.fillText(String(placed.pageIndex + 1), page.width * ppm - 4 * ppm, page.height * ppm - 3 * ppm);
+  context.globalAlpha = 1;
 
   const data = canvas.toDataURL("image/jpeg", 0.92);
   canvas.width = 0;
@@ -126,14 +172,14 @@ async function renderPage(
 }
 
 export async function exportCollagePdf(options: {
-  photos: Photo[];
+  groups: PhotoGroup[];
   grid: GridDefinition;
   settings: SheetSettings;
+  title: TitleSettings;
   onProgress?: (page: number, total: number) => void;
 }): Promise<void> {
-  const { photos, grid, settings, onProgress } = options;
-  const capacity = grid.rows * grid.columns;
-  const pages = allPageSlots(photos, capacity);
+  const { groups, grid, settings, title, onProgress } = options;
+  const pages = separatedSheets(groups, grid, settings, title);
   const orientation = settings.orientation === "landscape" ? "landscape" : "portrait";
   const doc = new jsPDF({
     orientation,
@@ -146,14 +192,19 @@ export async function exportCollagePdf(options: {
     creator: "AnyCollage",
   });
 
+  onProgress?.(0, pages.length);
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+
   for (let index = 0; index < pages.length; index += 1) {
     onProgress?.(index + 1, pages.length);
-    const slots = pages[index] ?? [];
-    const image = await renderPage(slots, grid, settings);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const sheet = pages[index];
+    if (!sheet) continue;
+    const image = await renderPage(sheet, settings, title);
     if (index > 0) doc.addPage("a4", orientation);
-    const { page } = sheetLayout(grid, settings);
+    const page = pageSize(settings.orientation);
     doc.addImage(image, "JPEG", 0, 0, page.width, page.height, undefined, "SLOW");
   }
 
-  doc.save("anycollage-a4.pdf");
+  downloadPdf(doc.output("blob"), "anycollage-a4.pdf");
 }

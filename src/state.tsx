@@ -15,23 +15,29 @@ import { dragHasFiles, endPhotoDrag } from "./drag";
 import { exportCollagePdf } from "./pdf";
 import { getGrid, gridCapacity } from "./grids";
 import { ACCEPT_ATTR, createPhoto, isSupportedFile, preloadImage, revokePhoto } from "./images";
-import { allPageSlots, importSummary, pageCountFor, pageSlots } from "./layout";
-import { collageReducer, initialCollageState } from "./reducer";
-import type { CollageState, Photo, SheetSettings } from "./types";
+import { importSummary, separatedSheets } from "./layout";
+import { activeGroup, activePhotos, allPhotos, collageReducer, initialCollageState, titleSettingsOf } from "./reducer";
+import type { CollageState, Photo, PhotoGroup, SheetSettings, TitleSettings, TitleWeight } from "./types";
 
 type ImportMode = { kind: "append" } | { kind: "replace"; id: string } | { kind: "insert"; index: number };
 
 type CollageApi = {
   state: CollageState;
   settings: SheetSettings;
+  title: TitleSettings;
+  photos: Photo[];
+  groups: PhotoGroup[];
+  activeGroup: PhotoGroup;
   grid: ReturnType<typeof getGrid>;
   capacity: number;
   pageCount: number;
   pageIndex: number;
-  currentSlots: (Photo | null)[];
-  pages: (Photo | null)[][];
+  pageTitle: string;
+  pages: Photo[][];
+  sheets: ReturnType<typeof separatedSheets<Photo>>;
   importing: boolean;
   exporting: boolean;
+  exportProgress: { page: number; total: number } | null;
   printing: boolean;
   message: string | null;
   fileDragActive: boolean;
@@ -39,12 +45,12 @@ type CollageApi = {
   openReplace: (id: string) => void;
   openInsert: (index: number) => void;
   addFiles: (list: FileList | File[]) => Promise<void>;
-  insertFiles: (index: number, list: FileList | File[]) => Promise<void>;
+  insertFiles: (index: number, list: FileList | File[], groupId?: string) => Promise<void>;
   replaceWithFiles: (id: string, list: FileList | File[]) => Promise<void>;
   removePhoto: (id: string) => void;
-  reorder: (from: number, to: number) => void;
-  swapPhotos: (a: number, b: number) => void;
-  movePhotoToEnd: (index: number) => void;
+  reorder: (from: number, to: number, groupId?: string) => void;
+  swapPhotos: (a: number, b: number, groupId?: string) => void;
+  movePhotoToEnd: (index: number, groupId?: string) => void;
   setGrid: (gridId: string) => void;
   setOrientation: (orientation: CollageState["orientation"]) => void;
   setMargin: (marginMm: number) => void;
@@ -56,6 +62,16 @@ type CollageApi = {
   setPage: (pageIndex: number) => void;
   setShowAll: (showAll: boolean) => void;
   setSelectedId: (id: string | null) => void;
+  createGroup: () => void;
+  renameGroup: (id: string, name: string) => void;
+  deleteGroup: (id: string) => void;
+  moveGroup: (id: string, toIndex: number) => void;
+  transferPhoto: (photoId: string, toId: string) => void;
+  selectGroup: (id: string) => void;
+  setTitleSize: (sizeMm: number) => void;
+  setTitleWeight: (weight: TitleWeight) => void;
+  setTitleOffset: (offsetMm: number) => void;
+  setTitleGap: (gapMm: number) => void;
   reset: () => void;
   print: () => Promise<void>;
   exportPdf: () => Promise<void>;
@@ -67,17 +83,18 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(collageReducer, initialCollageState);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ page: number; total: number } | null>(null);
   const [printing, setPrinting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileDragActive, setFileDragActive] = useState(false);
-  const photosRef = useRef(state.photos);
+  const photosRef = useRef(allPhotos(state));
   const stateRef = useRef(state);
   const tokenRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const modeRef = useRef<ImportMode>({ kind: "append" });
   const dragDepth = useRef(0);
 
-  photosRef.current = state.photos;
+  photosRef.current = allPhotos(state);
   stateRef.current = state;
 
   useEffect(() => {
@@ -160,7 +177,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   );
 
   const insertFiles = useCallback(
-    async (index: number, list: FileList | File[]) => {
+    async (index: number, list: FileList | File[], groupId?: string) => {
       const token = tokenRef.current;
       setImporting(true);
       try {
@@ -170,7 +187,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
           setMessage(importSummary(0, skipped, failed));
           return;
         }
-        dispatch({ type: "insert", index, photos: created });
+        dispatch({ type: "insert", index, photos: created, groupId });
         setMessage(importSummary(created.length, skipped, failed));
       } finally {
         if (token === tokenRef.current) setImporting(false);
@@ -182,7 +199,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   const replaceWithFiles = useCallback(
     async (id: string, list: FileList | File[]) => {
       const token = tokenRef.current;
-      const previous = photosRef.current.find((photo) => photo.id === id);
+      const previous = allPhotos(stateRef.current).find((photo) => photo.id === id);
       if (!previous) return;
       setImporting(true);
       try {
@@ -192,8 +209,9 @@ export function CollageProvider({ children }: { children: ReactNode }) {
           setMessage(importSummary(0, skipped, failed));
           return;
         }
-        const position = photosRef.current.findIndex((photo) => photo.id === id);
-        if (position < 0) {
+        const owner = stateRef.current.groups.find((group) => group.photos.some((photo) => photo.id === id));
+        const position = owner?.photos.findIndex((photo) => photo.id === id) ?? -1;
+        if (!owner || position < 0) {
           created.forEach(revokePhoto);
           return;
         }
@@ -202,7 +220,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
         revokePhoto(previous);
         dispatch({ type: "replace", id, photo: first });
         if (rest.length > 0) {
-          dispatch({ type: "insert", index: position + 1, photos: rest });
+          dispatch({ type: "insert", index: position + 1, photos: rest, groupId: owner.id });
         }
         setMessage(rest.length > 0 ? importSummary(created.length, skipped, failed) : "Photo remplacée");
       } finally {
@@ -266,15 +284,15 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   };
 
   const removePhoto = useCallback((id: string) => {
-    const photo = photosRef.current.find((item) => item.id === id);
+    const photo = allPhotos(stateRef.current).find((item) => item.id === id);
     if (!photo) return;
     revokePhoto(photo);
     dispatch({ type: "remove", id });
   }, []);
 
   const reset = useCallback(() => {
-    if (photosRef.current.length > 0) {
-      const confirmed = window.confirm("Effacer toutes les photos et revenir aux réglages d'origine ?");
+    if (allPhotos(stateRef.current).length > 0) {
+      const confirmed = window.confirm("Effacer tous les groupes et revenir aux réglages d'origine ?");
       if (!confirmed) return;
     }
     tokenRef.current += 1;
@@ -288,7 +306,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   const printLock = useRef(false);
 
   const print = useCallback(async () => {
-    if (photosRef.current.length === 0 || printLock.current) return;
+    if (allPhotos(stateRef.current).length === 0 || printLock.current) return;
     printLock.current = true;
     flushSync(() => setPrinting(true));
     document.body.classList.add("is-printing");
@@ -336,14 +354,16 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const exportPdf = useCallback(async () => {
-    if (photosRef.current.length === 0 || exporting) return;
+    if (allPhotos(stateRef.current).length === 0 || exporting) return;
     const current = stateRef.current;
     const grid = getGrid(current.gridId);
     setExporting(true);
+    setExportProgress({ page: 0, total: 1 });
     try {
       await exportCollagePdf({
-        photos: current.photos,
+        groups: current.groups,
         grid,
+        title: titleSettingsOf(current),
         settings: {
           orientation: current.orientation,
           marginMm: current.marginMm,
@@ -353,7 +373,10 @@ export function CollageProvider({ children }: { children: ReactNode }) {
           radius: current.radius,
           fit: current.fit,
         },
-        onProgress: (page, total) => setMessage(`PDF : page ${page} / ${total}`),
+        onProgress: (page, total) => {
+          setExportProgress({ page, total });
+          setMessage(page === 0 ? "Préparation du PDF…" : `PDF : page ${page} / ${total}`);
+        },
       });
       setMessage("PDF enregistré");
     } catch (error) {
@@ -361,6 +384,7 @@ export function CollageProvider({ children }: { children: ReactNode }) {
       setMessage(`Export PDF impossible (${detail}).`);
     } finally {
       setExporting(false);
+      setExportProgress(null);
     }
   }, [exporting]);
 
@@ -375,10 +399,8 @@ export function CollageProvider({ children }: { children: ReactNode }) {
         void print();
         return;
       }
-      const capacity = gridCapacity(getGrid(stateRef.current.gridId));
-      const count = pageCountFor(stateRef.current.photos.length, capacity);
       if (event.key === "ArrowRight") {
-        dispatch({ type: "page", pageIndex: Math.min(count - 1, stateRef.current.pageIndex + 1) });
+        dispatch({ type: "page", pageIndex: stateRef.current.pageIndex + 1 });
       } else if (event.key === "ArrowLeft") {
         dispatch({ type: "page", pageIndex: Math.max(0, stateRef.current.pageIndex - 1) });
       } else if (event.key === "Delete" && stateRef.current.selectedId) {
@@ -391,10 +413,21 @@ export function CollageProvider({ children }: { children: ReactNode }) {
 
   const grid = getGrid(state.gridId);
   const capacity = gridCapacity(grid);
-  const pageCount = pageCountFor(state.photos.length, capacity);
+  const photos = activePhotos(state);
+  const group = activeGroup(state);
+  const sheets = useMemo(
+    () =>
+      separatedSheets(state.groups, grid, {
+        orientation: state.orientation,
+        marginMm: state.marginMm,
+        gapMm: state.gapMm,
+      }, titleSettingsOf(state)),
+    [state.groups, grid, state.orientation, state.marginMm, state.gapMm, state.titleSizeMm, state.titleOffsetMm, state.titleGapMm],
+  );
+  const pageCount = Math.max(1, sheets.length);
   const pageIndex = Math.max(0, Math.min(state.pageIndex, pageCount - 1));
-  const pages = useMemo(() => allPageSlots(state.photos, capacity), [state.photos, capacity]);
-  const currentSlots = pageSlots(state.photos, pageIndex, capacity);
+  const pages = useMemo(() => sheets.map((sheet) => sheet.cells.map((cell) => cell.photo)), [sheets]);
+  const pageTitle = sheets[pageIndex]?.titles.map((item) => item.name).join(" · ") || group.name;
 
   const settings: SheetSettings = {
     orientation: state.orientation,
@@ -409,14 +442,20 @@ export function CollageProvider({ children }: { children: ReactNode }) {
   const api: CollageApi = {
     state,
     settings,
+    title: titleSettingsOf(state),
+    photos,
+    groups: state.groups,
+    activeGroup: group,
     grid,
     capacity,
     pageCount,
     pageIndex,
-    currentSlots,
+    pageTitle,
     pages,
+    sheets,
     importing,
     exporting,
+    exportProgress,
     printing,
     message,
     fileDragActive,
@@ -427,9 +466,9 @@ export function CollageProvider({ children }: { children: ReactNode }) {
     insertFiles,
     replaceWithFiles,
     removePhoto,
-    reorder: (from, to) => dispatch({ type: "reorder", from, to }),
-    swapPhotos: (a, b) => dispatch({ type: "swap", a, b }),
-    movePhotoToEnd: (index) => dispatch({ type: "move-end", index }),
+    reorder: (from, to, groupId) => dispatch({ type: "reorder", from, to, groupId }),
+    swapPhotos: (a, b, groupId) => dispatch({ type: "swap", a, b, groupId }),
+    movePhotoToEnd: (index, groupId) => dispatch({ type: "move-end", index, groupId }),
     setGrid: (gridId) => dispatch({ type: "grid", gridId }),
     setOrientation: (orientation) => dispatch({ type: "orientation", orientation }),
     setMargin: (marginMm) => dispatch({ type: "margin", marginMm }),
@@ -441,6 +480,21 @@ export function CollageProvider({ children }: { children: ReactNode }) {
     setPage: (next) => dispatch({ type: "page", pageIndex: next }),
     setShowAll: (showAll) => dispatch({ type: "show-all", showAll }),
     setSelectedId: (id) => dispatch({ type: "select", id }),
+    createGroup: () => dispatch({ type: "create-group" }),
+    renameGroup: (id, name) => dispatch({ type: "rename-group", id, name }),
+    deleteGroup: (id) => {
+      const target = stateRef.current.groups.find((item) => item.id === id);
+      if (!target || stateRef.current.groups.length <= 1) return;
+      target.photos.forEach(revokePhoto);
+      dispatch({ type: "delete-group", id });
+    },
+    selectGroup: (id) => dispatch({ type: "select-group", id }),
+    moveGroup: (id, toIndex) => dispatch({ type: "move-group", id, toIndex }),
+    transferPhoto: (photoId, toId) => dispatch({ type: "transfer-photo", photoId, toId }),
+    setTitleSize: (sizeMm) => dispatch({ type: "title-size", sizeMm }),
+    setTitleWeight: (weight) => dispatch({ type: "title-weight", weight }),
+    setTitleOffset: (offsetMm) => dispatch({ type: "title-offset", offsetMm }),
+    setTitleGap: (gapMm) => dispatch({ type: "title-gap", gapMm }),
     reset,
     print,
     exportPdf,

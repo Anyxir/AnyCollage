@@ -1,7 +1,7 @@
 import { DEFAULT_GRID_ID, GRIDS, getGrid, gridCapacity } from "./grids";
-import { borderColorFor, containDest, coverSource, pageSize, sheetLayout } from "./geometry";
-import { allPageSlots, arrayMove, pageCountFor, photoCountLabel, swapItems } from "./layout";
-import { collageReducer, initialCollageState } from "./reducer";
+import { borderColorFor, containDest, coverSource, pageSize, sheetLayout, titleBandMm } from "./geometry";
+import { allPageSlots, arrayMove, groupSheets, pageCountFor, photoCountLabel, separatedSheets, swapItems } from "./layout";
+import { activePhotos, collageReducer, initialCollageState } from "./reducer";
 import type { Photo } from "./types";
 import { describe, expect, it } from "vitest";
 
@@ -181,8 +181,8 @@ describe("reducer", () => {
     expect(state.pageIndex).toBe(4);
     state = collageReducer(state, { type: "grid", gridId: "grid-4" });
     expect(state.gridId).toBe("grid-4");
-    expect(pageCountFor(state.photos.length, 4)).toBe(2);
-    expect(state.pageIndex).toBe(1);
+    expect(pageCountFor(activePhotos(state).length, 4)).toBe(2);
+    expect(state.pageIndex).toBe(2);
   });
 
   it("resets to the 4-photo grid", () => {
@@ -191,6 +191,82 @@ describe("reducer", () => {
     state = collageReducer(state, { type: "reset" });
     expect(state).toEqual(initialCollageState);
     expect(state.gridId).toBe("grid-4");
+  });
+
+  it("keeps each group's photos separate and titles every page", () => {
+    let state = collageReducer(initialCollageState, { type: "rename-group", id: "group-1", name: "CP A" });
+    state = collageReducer(state, { type: "add", photos: fake(73) });
+    state = collageReducer(state, { type: "create-group" });
+    state = collageReducer(state, { type: "rename-group", id: "group-2", name: "CP B" });
+    state = collageReducer(state, { type: "add", photos: fake(31).map((photo) => ({ ...photo, id: `b-${photo.id}` })) });
+    expect(state.groups[0]?.photos).toHaveLength(73);
+    expect(state.groups[1]?.photos).toHaveLength(31);
+    expect(state.groups[0]?.photos[0]?.id).toBe("p1");
+    expect(activePhotos(state).map((photo) => photo.id)[0]).toBe("b-p1");
+    expect(state.gridId).toBe("grid-4");
+
+    const sheets = groupSheets(state.groups, 30);
+    expect(sheets).toHaveLength(4);
+    expect(sheets[0]?.groupName).toBe("CP A");
+    expect(sheets[0]?.slots.filter(Boolean)).toHaveLength(30);
+    expect(sheets[2]?.groupName).toBe("CP A · CP B");
+    expect(sheets[2]?.slots.filter(Boolean)).toHaveLength(30);
+    expect(sheets[3]?.groupName).toBe("CP B");
+    expect(sheets[3]?.slots.filter(Boolean)).toHaveLength(14);
+    const followed = separatedSheets(
+      [
+        { id: "a", name: "CP A", photos: [1, 2] },
+        { id: "b", name: "CP B", photos: [3] },
+      ],
+      { rows: 6, columns: 2 },
+      { orientation: "portrait", marginMm: 5, gapMm: 3 },
+      { sizeMm: 6, offsetMm: 0, gapMm: 3 },
+    );
+    expect(followed).toHaveLength(1);
+    expect(followed[0]?.titles.map((item) => item.name)).toEqual(["CP A", "CP B"]);
+    expect(followed[0]?.cells.map((cell) => cell.photo)).toEqual([1, 2, 3]);
+    const firstTitle = followed[0]?.titles[0]?.top ?? 0;
+    const secondTitle = followed[0]?.titles[1]?.top ?? 0;
+    expect(secondTitle).toBeGreaterThan(firstTitle);
+    expect(followed[0]?.cells[0]?.y).toBeGreaterThan(firstTitle);
+    expect(followed[0]?.cells[2]?.y).toBeGreaterThan(secondTitle);
+    expect(followed[0]?.cells[0]?.y).toBe(followed[0]?.cells[1]?.y);
+
+    const split = separatedSheets(
+      [
+        { id: "a", name: "CP A", photos: [1, 2] },
+        { id: "b", name: "CP B", photos: [3] },
+      ],
+      { rows: 2, columns: 2 },
+      { orientation: "portrait", marginMm: 5, gapMm: 3 },
+      { sizeMm: 6, offsetMm: 0, gapMm: 3 },
+    );
+    expect(split.map((page) => page.titles.map((item) => item.name))).toEqual([["CP A"], ["CP B"]]);
+    expect(split.map((page) => page.cells.map((cell) => cell.photo))).toEqual([[1, 2], [3]]);
+
+    const moved = state.groups[0]?.photos[0];
+    state = collageReducer(state, { type: "transfer-photo", photoId: moved?.id ?? "", toId: "group-2" });
+    expect(state.groups[0]?.photos.some((photo) => photo.id === moved?.id)).toBe(false);
+    expect(state.groups[1]?.photos.some((photo) => photo.id === moved?.id)).toBe(true);
+    state = collageReducer(state, { type: "transfer-photo", photoId: moved?.id ?? "", toId: "group-1" });
+
+    state = collageReducer(state, { type: "move-group", id: "group-1", toIndex: 1 });
+    expect(state.groups.map((group) => group.name)).toEqual(["CP B", "CP A"]);
+    state = collageReducer(state, { type: "move-group", id: "group-1", toIndex: 0 });
+    expect(state.groups.map((group) => group.name)).toEqual(["CP A", "CP B"]);
+
+    state = collageReducer(state, { type: "delete-group", id: "group-2" });
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0]?.name).toBe("CP A");
+    expect(collageReducer(state, { type: "delete-group", id: "group-1" }).groups).toHaveLength(1);
+  });
+
+  it("reserves a band for the centered group title without changing the default grid", () => {
+    const band = titleBandMm({ sizeMm: 6, offsetMm: 0, gapMm: 3 });
+    const { cells } = sheetLayout({ rows: 2, columns: 2 }, { orientation: "portrait", marginMm: 5, gapMm: 3 }, band);
+    expect(cells[0]?.y).toBeGreaterThan(5 + band - 0.1);
+    expect(initialCollageState.gridId).toBe("grid-4");
+    expect(initialCollageState.groups).toHaveLength(1);
   });
 
   it("describes the library count in French", () => {

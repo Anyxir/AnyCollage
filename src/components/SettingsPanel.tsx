@@ -4,7 +4,7 @@ import type { BorderStyle, ObjectFitMode, Orientation, RadiusStyle } from "../ty
 const MARGINS = [0, 2, 5, 10];
 
 export function SettingsPanel() {
-  const { state, setOrientation, setMargin, setGap, setBackground, setBorder, setRadius, setFit } = useCollage();
+  const { state, setOrientation, setMargin, setGap, setBackground, setBorder, setRadius, setFit, setTitleSize, setTitleWeight, setTitleOffset, setTitleGap } = useCollage();
   const customMargin = !MARGINS.includes(state.marginMm);
 
   return (
@@ -12,6 +12,54 @@ export function SettingsPanel() {
       <header className="panel-head">
         <h2>Réglages</h2>
       </header>
+
+      <fieldset>
+        <legend>Titre du groupe</legend>
+        <label className="measure">
+          Taille
+          <input
+            type="number"
+            min={3}
+            max={16}
+            step={0.5}
+            value={state.titleSizeMm}
+            aria-label="Taille du titre en millimètres"
+            onChange={(event) => setTitleSize(Number(event.target.value))}
+          />
+          mm
+        </label>
+        <div className="choices">
+          <Choice name="title-weight" label="Moyen" checked={state.titleWeight === 500} onChange={() => setTitleWeight(500)} />
+          <Choice name="title-weight" label="Demi-gras" checked={state.titleWeight === 600} onChange={() => setTitleWeight(600)} />
+          <Choice name="title-weight" label="Gras" checked={state.titleWeight === 700} onChange={() => setTitleWeight(700)} />
+        </div>
+        <label className="measure">
+          Position
+          <input
+            type="number"
+            min={0}
+            max={25}
+            step={0.5}
+            value={state.titleOffsetMm}
+            aria-label="Décalage vertical du titre en millimètres"
+            onChange={(event) => setTitleOffset(Number(event.target.value))}
+          />
+          mm
+        </label>
+        <label className="measure">
+          Espace sous le titre
+          <input
+            type="number"
+            min={0}
+            max={20}
+            step={0.5}
+            value={state.titleGapMm}
+            aria-label="Espace entre le titre et le collage"
+            onChange={(event) => setTitleGap(Number(event.target.value))}
+          />
+          mm
+        </label>
+      </fieldset>
 
       <fieldset>
         <legend>Orientation</legend>

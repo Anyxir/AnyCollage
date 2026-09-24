@@ -1,19 +1,22 @@
-import { borderColorFor, sheetLayout } from "../geometry";
+import { borderColorFor, pageSize } from "../geometry";
 import { BORDER_MM, RADIUS_MM } from "../geometry";
-import type { Photo, SheetSettings } from "../types";
+import type { PlacedCell, PlacedTitle } from "../layout";
+import type { Photo, SheetSettings, TitleSettings } from "../types";
 import type { GridDefinition } from "../types";
 
 type PageThumbnailProps = {
-  slots: (Photo | null)[];
+  titles: PlacedTitle[];
+  cells: PlacedCell<Photo>[];
   grid: GridDefinition;
   settings: SheetSettings;
+  title: TitleSettings;
   label: string;
   active: boolean;
   onClick: () => void;
 };
 
-export function PageThumbnail({ slots, grid, settings, label, active, onClick }: PageThumbnailProps) {
-  const { page, cells } = sheetLayout(grid, settings);
+export function PageThumbnail({ titles, cells, settings, title, label, active, onClick }: PageThumbnailProps) {
+  const page = pageSize(settings.orientation);
   const borderColor = borderColorFor(settings.background);
   const radius = RADIUS_MM[settings.radius];
   const border = BORDER_MM[settings.border];
@@ -33,8 +36,24 @@ export function PageThumbnail({ slots, grid, settings, label, active, onClick }:
           background: settings.background,
         }}
       >
+        {titles.map((item) => (
+          <span
+            key={`${item.name}-${item.top}`}
+            className="page-thumb-title"
+            style={{
+              top: `${(item.top / page.height) * 100}%`,
+              fontSize: `${title.sizeMm * 0.35}px`,
+              color: borderColor,
+            }}
+          >
+            {item.name}
+          </span>
+        ))}
+        <span className="page-thumb-number" style={{ color: borderColor }}>
+          {label.replace(/\D+/g, " ").trim().split(" ")[0]}
+        </span>
         {cells.map((cell, index) => {
-          const photo = slots[index];
+          const photo = cell.photo;
           return (
             <span
               key={index}

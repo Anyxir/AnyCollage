@@ -82,6 +82,26 @@ export function clampGap(value: number): number {
   return Math.min(20, Math.max(0, value));
 }
 
+export function clampTitleSize(value: number): number {
+  if (!Number.isFinite(value)) return 6;
+  return Math.min(16, Math.max(3, Math.round(value * 10) / 10));
+}
+
+export function clampTitleOffset(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(25, Math.max(0, Math.round(value * 10) / 10));
+}
+
+export function clampTitleGap(value: number): number {
+  if (!Number.isFinite(value)) return 3;
+  return Math.min(20, Math.max(0, Math.round(value * 10) / 10));
+}
+
+/** Space reserved above the grid: vertical shift + text + gap before the photos. */
+export function titleBandMm(title: { sizeMm: number; offsetMm: number; gapMm: number }): number {
+  return title.offsetMm + title.sizeMm * 1.15 + title.gapMm;
+}
+
 function fits(
   pageW: number,
   pageH: number,
@@ -148,11 +168,13 @@ export function layoutCells(options: {
 export function sheetLayout(
   grid: { rows: number; columns: number },
   settings: { orientation: Orientation; marginMm: number; gapMm: number },
+  titleBand = 0,
 ): { page: PageSize; space: { margin: number; gap: number }; cells: Rect[] } {
   const page = pageSize(settings.orientation);
+  const band = Math.max(0, titleBand);
   const space = effectiveSpacing({
     pageW: page.width,
-    pageH: page.height,
+    pageH: page.height - band,
     rows: grid.rows,
     columns: grid.columns,
     margin: settings.marginMm,
@@ -160,12 +182,12 @@ export function sheetLayout(
   });
   const cells = layoutCells({
     pageW: page.width,
-    pageH: page.height,
+    pageH: page.height - band,
     rows: grid.rows,
     columns: grid.columns,
     margin: space.margin,
     gap: space.gap,
-  });
+  }).map((cell) => ({ ...cell, y: roundMm(cell.y + band) }));
   return { page, space, cells };
 }
 

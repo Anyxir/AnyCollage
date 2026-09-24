@@ -1,8 +1,8 @@
 import { useCollage } from "../state";
 
 export function TopBar() {
-  const { state, importing, exporting, printing, openImporter, print, exportPdf, reset } = useCollage();
-  const canOutput = state.photos.length > 0 && !exporting && !printing;
+  const { groups, importing, exporting, exportProgress, printing, openImporter, print, exportPdf, reset } = useCollage();
+  const canOutput = groups.some((group) => group.photos.length > 0) && !exporting && !printing;
 
   return (
     <header className="topbar no-print">
@@ -36,12 +36,32 @@ export function TopBar() {
           disabled={!canOutput}
           title={canOutput ? "Enregistrer un PDF A4" : "Importez des photos pour exporter"}
         >
-          {exporting ? "Export…" : "Exporter en PDF"}
+          {exporting && exportProgress
+            ? `PDF ${exportProgress.page}/${exportProgress.total}`
+            : exporting
+              ? "Export…"
+              : "Exporter en PDF"}
         </button>
         <button type="button" className="btn btn-ghost" onClick={reset}>
           Réinitialiser
         </button>
       </div>
+      {exportProgress && (
+        <div
+          className="export-bar"
+          role="progressbar"
+          aria-label="Export PDF"
+          aria-valuemin={0}
+          aria-valuemax={exportProgress.total}
+          aria-valuenow={exportProgress.page}
+        >
+          <span
+            style={{
+              width: `${exportProgress.total === 0 ? 0 : (exportProgress.page / exportProgress.total) * 100}%`,
+            }}
+          />
+        </div>
+      )}
     </header>
   );
 }

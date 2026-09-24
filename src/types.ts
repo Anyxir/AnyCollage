@@ -36,8 +36,29 @@ export type SheetSettings = {
   fit: ObjectFitMode;
 };
 
-export type CollageState = {
+export type TitleWeight = 500 | 600 | 700;
+
+export type TitleSettings = {
+  sizeMm: number;
+  weight: TitleWeight;
+  offsetMm: number;
+  gapMm: number;
+};
+
+export type PhotoGroup = {
+  id: string;
+  name: string;
   photos: Photo[];
+};
+
+export type CollageState = {
+  groups: PhotoGroup[];
+  activeGroupId: string;
+  nextGroupNumber: number;
+  titleSizeMm: number;
+  titleWeight: TitleWeight;
+  titleOffsetMm: number;
+  titleGapMm: number;
   gridId: string;
   orientation: Orientation;
   marginMm: number;

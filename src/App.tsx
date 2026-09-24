@@ -1,3 +1,4 @@
+import { ContextMenu } from "./components/ContextMenu";
 import { PhotoLibrary } from "./components/PhotoLibrary";
 import { PrintPreview } from "./components/PrintPreview";
 import { GridSelector } from "./components/GridSelector";
@@ -19,6 +20,7 @@ export function App() {
           <SettingsPanel />
         </aside>
       </div>
+      <ContextMenu />
       {fileDragActive && (
         <div className="file-overlay no-print">
           <div>

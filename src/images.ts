@@ -28,12 +28,29 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-async function blobUrlFromCanvas(canvas: HTMLCanvasElement): Promise<string> {
+function browserCanShow(file: File): boolean {
+  const type = file.type.toLowerCase();
+  if (type === "image/jpeg" || type === "image/jpg" || type === "image/png" || type === "image/webp") return true;
+  const name = file.name.toLowerCase();
+  return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".webp");
+}
+
+async function blobUrlFromCanvas(canvas: HTMLCanvasElement, quality: number): Promise<string> {
   const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/jpeg", 0.82);
+    canvas.toBlob(resolve, "image/jpeg", quality);
   });
   if (!blob) throw new Error("thumbnail");
   return URL.createObjectURL(blob);
+}
+
+async function jpegUrlFromSource(source: CanvasImageSource, width: number, height: number, quality: number): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas");
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return blobUrlFromCanvas(canvas, quality);
 }
 
 async function thumbnailFromSource(
@@ -53,7 +70,14 @@ async function thumbnailFromSource(
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, targetW, targetH);
   context.drawImage(source, 0, 0, targetW, targetH);
-  return blobUrlFromCanvas(canvas);
+  return blobUrlFromCanvas(canvas, 0.82);
+}
+
+async function displayUrl(file: File, originalUrl: string, source: CanvasImageSource, width: number, height: number): Promise<string> {
+  if (browserCanShow(file)) return originalUrl;
+  const converted = await jpegUrlFromSource(source, width, height, 0.92);
+  URL.revokeObjectURL(originalUrl);
+  return converted;
 }
 
 export async function createPhoto(file: File): Promise<Photo> {
@@ -63,11 +87,14 @@ export async function createPhoto(file: File): Promise<Photo> {
       try {
         const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
         try {
-          const thumbUrl = await thumbnailFromSource(bitmap, bitmap.width, bitmap.height);
+          const [thumbUrl, display] = await Promise.all([
+            thumbnailFromSource(bitmap, bitmap.width, bitmap.height),
+            displayUrl(file, url, bitmap, bitmap.width, bitmap.height),
+          ]);
           return {
             id: uid(),
             name: file.name,
-            url,
+            url: display,
             thumbUrl,
             width: bitmap.width,
             height: bitmap.height,
@@ -82,10 +109,11 @@ export async function createPhoto(file: File): Promise<Photo> {
 
     const image = await loadImage(url);
     const thumbUrl = await thumbnailFromSource(image, image.naturalWidth, image.naturalHeight);
+    const display = await displayUrl(file, url, image, image.naturalWidth, image.naturalHeight);
     return {
       id: uid(),
       name: file.name,
-      url,
+      url: display,
       thumbUrl,
       width: image.naturalWidth,
       height: image.naturalHeight,

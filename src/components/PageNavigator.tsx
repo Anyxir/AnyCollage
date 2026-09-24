@@ -2,10 +2,23 @@ import { useCollage } from "../state";
 import { PageThumbnail } from "./PageThumbnail";
 
 export function PageNavigator() {
-  const { pageIndex, pageCount, pages, grid, settings, state, setPage, setShowAll } = useCollage();
+  const { pageIndex, pageCount, sheets, grid, settings, title, groups, activeGroup, state, setPage, setShowAll, selectGroup } = useCollage();
 
   return (
     <div className="navigator">
+      <div className="group-chips" aria-label="Groupes">
+        {groups.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            className={group.id === activeGroup.id ? "group-chip is-on" : "group-chip"}
+            aria-pressed={group.id === activeGroup.id}
+            onClick={() => selectGroup(group.id)}
+          >
+            {group.name}
+          </button>
+        ))}
+      </div>
       <div className="navigator-main">
         <button type="button" onClick={() => setPage(pageIndex - 1)} disabled={pageIndex <= 0}>
           Précédent
@@ -40,15 +53,17 @@ export function PageNavigator() {
       </div>
       {!state.showAll && pageCount > 1 && (
         <div className="thumb-strip" aria-label="Miniatures des pages">
-          {pages.map((slots, index) => (
+          {sheets.map((sheet) => (
             <PageThumbnail
-              key={index}
-              slots={slots}
+              key={sheet.pageIndex}
+              titles={sheet.titles}
+              cells={sheet.cells}
               grid={grid}
               settings={settings}
-              label={`Page ${index + 1}`}
-              active={index === pageIndex}
-              onClick={() => setPage(index)}
+              title={title}
+              label={`Page ${sheet.pageIndex + 1}`}
+              active={sheet.pageIndex === pageIndex}
+              onClick={() => setPage(sheet.pageIndex)}
             />
           ))}
         </div>

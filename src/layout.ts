@@ -1,3 +1,6 @@
+import { effectiveSpacing, pageSize } from "./geometry";
+import type { Orientation } from "./types";
+
 export function pageCountFor(photoCount: number, capacity: number): number {
   if (capacity <= 0) return 1;
   if (photoCount <= 0) return 1;
@@ -51,6 +54,125 @@ export function insertAt<T>(items: T[], index: number, incoming: T[]): T[] {
   const at = Math.max(0, Math.min(index, next.length));
   next.splice(at, 0, ...incoming);
   return next;
+}
+
+export type GroupSheet<T> = {
+  groupId: string;
+  groupName: string;
+  pageIndex: number;
+  pageCount: number;
+  slots: (T | null)[];
+};
+
+export function groupSheets<T>(
+  groups: { id: string; name: string; photos: T[] }[],
+  capacity: number,
+): GroupSheet<T>[] {
+  const ordered = groups.flatMap((group) => group.photos.map((photo) => ({ photo, group })));
+  const pages = allPageSlots(ordered, capacity);
+  return pages.map((page, pageIndex) => {
+    const names: string[] = [];
+    for (const entry of page) {
+      if (entry && !names.includes(entry.group.name)) names.push(entry.group.name);
+    }
+    const group = page.find((entry) => entry !== null)?.group ?? groups[0];
+    return {
+      groupId: group?.id ?? "",
+      groupName: names.join(" · ") || group?.name || "",
+      pageIndex,
+      pageCount: pages.length,
+      slots: page.map((entry) => entry?.photo ?? null),
+    };
+  });
+}
+
+export type PlacedTitle = { name: string; top: number };
+export type PlacedCell<T> = { photo: T; x: number; y: number; w: number; h: number };
+export type SeparatedPage<T> = {
+  pageIndex: number;
+  pageCount: number;
+  titles: PlacedTitle[];
+  cells: PlacedCell<T>[];
+};
+
+const roundMm = (value: number) => Math.round(value * 1000) / 1000;
+
+export function separatedSheets<T>(
+  groups: { id: string; name: string; photos: T[] }[],
+  grid: { rows: number; columns: number },
+  settings: { orientation: Orientation; marginMm: number; gapMm: number },
+  title: { sizeMm: number; offsetMm: number; gapMm: number },
+): SeparatedPage<T>[] {
+  const page = pageSize(settings.orientation);
+  const space = effectiveSpacing({
+    pageW: page.width,
+    pageH: page.height,
+    rows: grid.rows,
+    columns: grid.columns,
+    margin: settings.marginMm,
+    gap: settings.gapMm,
+  });
+  const columns = Math.max(1, grid.columns);
+  const innerW = page.width - space.margin * 2;
+  const innerH = page.height - space.margin * 2;
+  const cellW = (innerW - space.gap * (columns - 1)) / columns;
+  const titleH = title.sizeMm * 1.15 + title.gapMm;
+  const bottom = page.height - space.margin;
+  const freshTop = space.margin + title.offsetMm;
+  const gridCellH = (innerH - space.gap * Math.max(0, grid.rows - 1)) / Math.max(1, grid.rows);
+  const cellH = Math.min(gridCellH, Math.max(8, bottom - freshTop - titleH));
+  const pages: SeparatedPage<T>[] = [];
+  let titles: PlacedTitle[] = [];
+  let cells: PlacedCell<T>[] = [];
+  let y = freshTop;
+  const fits = (height: number) => y + height <= bottom + 0.05;
+
+  const flush = () => {
+    if (titles.length === 0 && cells.length === 0) return;
+    pages.push({ pageIndex: pages.length, pageCount: 0, titles, cells });
+    titles = [];
+    cells = [];
+    y = freshTop;
+  };
+
+  const filled = groups.filter((group) => group.photos.length > 0);
+  if (filled.length === 0) {
+    return [{ pageIndex: 0, pageCount: 1, titles: [{ name: groups[0]?.name ?? "", top: roundMm(freshTop) }], cells: [] }];
+  }
+
+  for (const group of filled) {
+    if (!fits(titleH + cellH) && (titles.length > 0 || cells.length > 0)) flush();
+    titles.push({ name: group.name, top: roundMm(y) });
+    y += titleH;
+    let column = 0;
+    for (const photo of group.photos) {
+      if (column === 0 && !fits(cellH) && cells.length > 0) {
+        flush();
+        titles.push({ name: group.name, top: roundMm(y) });
+        y += titleH;
+      }
+      cells.push({
+        photo,
+        x: roundMm(space.margin + column * (cellW + space.gap)),
+        y: roundMm(y),
+        w: roundMm(cellW),
+        h: roundMm(cellH),
+      });
+      column += 1;
+      if (column === columns) {
+        y += cellH + space.gap;
+        column = 0;
+      }
+    }
+    if (column !== 0) y += cellH + space.gap;
+  }
+  flush();
+  return pages.map((item) => ({ ...item, pageCount: pages.length }));
+}
+
+export function groupCountLabel(count: number): string {
+  if (count === 1) return "1 photo";
+  return `${count} photos`;
 }
 
 export function photoCountLabel(count: number): string {

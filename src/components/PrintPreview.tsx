@@ -5,14 +5,25 @@ import { A4Page } from "./A4Page";
 import { PageNavigator } from "./PageNavigator";
 import { PageThumbnail } from "./PageThumbnail";
 
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 2.5;
+const ZOOM_STEP = 0.1;
+
 function mmToPx(mm: number): number {
   return (mm * 96) / 25.4;
+}
+
+function clampZoom(value: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 10) / 10));
 }
 
 export function PrintPreview() {
   const collage = useCollage();
   const hostRef = useRef<HTMLDivElement>(null);
+  const fitScaleRef = useRef(0.6);
+  const manualZoomRef = useRef(false);
   const [scale, setScale] = useState(0.6);
+  const [manualZoom, setManualZoom] = useState(false);
   const size = pageSize(collage.settings.orientation);
 
   useEffect(() => {
@@ -21,8 +32,10 @@ export function PrintPreview() {
     const update = () => {
       const availableW = Math.max(120, host.clientWidth - 36);
       const availableH = Math.max(120, host.clientHeight - 36);
-      const next = Math.min(availableW / mmToPx(size.width), availableH / mmToPx(size.height));
-      setScale(Math.max(0.15, Math.min(next, 1.4)));
+      const next = Math.min(availableW / mmToPx(size.width), availableH / mmToPx(size.height), MAX_ZOOM);
+      const fitted = Math.max(MIN_ZOOM, next);
+      fitScaleRef.current = fitted;
+      if (!manualZoomRef.current) setScale(fitted);
     };
     update();
     const observer = new ResizeObserver(update);
@@ -30,12 +43,24 @@ export function PrintPreview() {
     return () => observer.disconnect();
   }, [size.width, size.height, collage.state.showAll]);
 
+  const setManualScale = (next: number) => {
+    manualZoomRef.current = true;
+    setManualZoom(true);
+    setScale(clampZoom(next));
+  };
+
+  const fitPage = () => {
+    manualZoomRef.current = false;
+    setManualZoom(false);
+    setScale(fitScaleRef.current);
+  };
+
   const sheetWidth = mmToPx(size.width);
   const sheetHeight = mmToPx(size.height);
 
   return (
     <>
-      <section className="preview no-print" aria-label="Aperçu A4">
+      <section className="preview no-print" aria-label="Aperçu A4" data-menu="canvas">
         <header className="preview-head">
           <div>
             <h2>
@@ -43,26 +68,40 @@ export function PrintPreview() {
               Aperçu A4
             </h2>
             <p>
-              {size.width} × {size.height} mm · {collage.pageCount === 1 ? "1 page" : `${collage.pageCount} pages`} ·{" "}
-              {collage.capacity} emplacements
+              {collage.pageTitle} · {size.width} × {size.height} mm ·{" "}
+              {collage.pageCount === 1 ? "1 page" : `${collage.pageCount} pages`} · {collage.capacity} emplacements
             </p>
           </div>
           <p className="hint">Impression : échelle 100 %, sans en-têtes ni marges du navigateur.</p>
         </header>
         <PageNavigator />
+        <div className="zoom-controls" role="group" aria-label="Zoom de l’aperçu">
+          <button type="button" onClick={() => setManualScale(scale - ZOOM_STEP)} disabled={collage.state.showAll || scale <= MIN_ZOOM}>
+            −
+          </button>
+          <span>{Math.round(scale * 100)} %</span>
+          <button type="button" onClick={() => setManualScale(scale + ZOOM_STEP)} disabled={collage.state.showAll || scale >= MAX_ZOOM}>
+            +
+          </button>
+          <button type="button" onClick={fitPage} disabled={collage.state.showAll || !manualZoom}>
+            Ajuster
+          </button>
+        </div>
         <div className="preview-stage" ref={hostRef}>
           {collage.state.showAll ? (
             <div className="all-pages">
-              {collage.pages.map((slots, index) => (
+              {collage.sheets.map((sheet) => (
                 <PageThumbnail
-                  key={index}
-                  slots={slots}
+                  key={sheet.pageIndex}
+                  titles={sheet.titles}
+                  cells={sheet.cells}
                   grid={collage.grid}
                   settings={collage.settings}
-                  label={`Page ${index + 1} / ${collage.pageCount}`}
-                  active={index === collage.pageIndex}
+                  title={collage.title}
+                  label={`Page ${sheet.pageIndex + 1} / ${sheet.pageCount}`}
+                  active={sheet.pageIndex === collage.pageIndex}
                   onClick={() => {
-                    collage.setPage(index);
+                    collage.setPage(sheet.pageIndex);
                     collage.setShowAll(false);
                   }}
                 />
@@ -79,7 +118,12 @@ export function PrintPreview() {
                 }}
               >
                 <div key={collage.pageIndex} className="sheet-enter">
-                  <A4Page slots={collage.currentSlots} pageIndex={collage.pageIndex} interactive />
+                  <A4Page
+                    titles={collage.sheets[collage.pageIndex]?.titles ?? []}
+                    cells={collage.sheets[collage.pageIndex]?.cells ?? []}
+                    pageIndex={collage.pageIndex}
+                    interactive
+                  />
                 </div>
               </div>
             </div>
@@ -88,8 +132,8 @@ export function PrintPreview() {
       </section>
       {collage.printing && (
         <div id="print-root">
-          {collage.pages.map((slots, index) => (
-            <A4Page key={index} slots={slots} pageIndex={index} interactive={false} />
+          {collage.sheets.map((sheet) => (
+            <A4Page key={sheet.pageIndex} titles={sheet.titles} cells={sheet.cells} pageIndex={sheet.pageIndex} interactive={false} />
           ))}
         </div>
       )}

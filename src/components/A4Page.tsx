@@ -1,20 +1,24 @@
 import { useState } from "react";
-import { beginPhotoDrag, dragHasFiles, endPhotoDrag, photoDragIndex } from "../drag";
-import { BORDER_MM, RADIUS_MM, borderColorFor, sheetLayout } from "../geometry";
+import { beginPhotoDrag, dragHasFiles, endPhotoDrag, photoDragGroupId, photoDragIndex } from "../drag";
+import { BORDER_MM, RADIUS_MM, borderColorFor, pageSize } from "../geometry";
+import type { PlacedCell, PlacedTitle } from "../layout";
 import { useCollage } from "../state";
 import type { Photo } from "../types";
 
 type A4PageProps = {
-  slots: (Photo | null)[];
+  titles: PlacedTitle[];
+  cells: PlacedCell<Photo>[];
   pageIndex: number;
   interactive: boolean;
 };
 
-export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
+export function A4Page({ titles, cells, pageIndex, interactive }: A4PageProps) {
   const {
     grid,
-    capacity,
     settings,
+    title,
+    photos,
+    groups,
     state,
     swapPhotos,
     movePhotoToEnd,
@@ -25,12 +29,12 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
     openInsert,
     setSelectedId,
   } = useCollage();
-  const { page, cells } = sheetLayout(grid, settings);
+  const page = pageSize(settings.orientation);
   const borderMm = BORDER_MM[settings.border];
   const radiusMm = RADIUS_MM[settings.radius];
   const borderColor = borderColorFor(settings.background);
   const [over, setOver] = useState<number | null>(null);
-  const filled = slots.filter(Boolean).length;
+  const filled = cells.length;
 
   return (
     <article
@@ -44,7 +48,21 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
         color: borderColor,
       }}
     >
-      {interactive && state.photos.length === 0 && (
+      <p className="sheet-number">{pageIndex + 1}</p>
+      {titles.map((item) => (
+        <h3
+          key={`${item.name}-${item.top}`}
+          className="sheet-title"
+          style={{
+            top: `${item.top}mm`,
+            fontSize: `${title.sizeMm}mm`,
+            fontWeight: title.weight,
+          }}
+        >
+          {item.name}
+        </h3>
+      ))}
+      {interactive && groups.every((item) => item.photos.length === 0) && (
         <div className="sheet-empty">
           <img className="sheet-mark" src="/logo.png" alt="" />
           <strong>Feuille A4</strong>
@@ -55,12 +73,15 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
         </div>
       )}
       {cells.map((cell, localIndex) => {
-        const photo = slots[localIndex] ?? null;
-        const globalIndex = pageIndex * capacity + localIndex;
+        const photo = cell.photo;
+        const globalIndex = localIndex;
         const selected = photo !== null && state.selectedId === photo.id;
         return (
           <div
             key={grid.slots[localIndex]?.index ?? localIndex}
+            data-menu={photo ? "photo" : undefined}
+            data-photo-id={photo?.id}
+            data-group-id={photo ? groups.find((item) => item.photos.some((candidate) => candidate.id === photo.id))?.id : undefined}
             className={[
               "cell",
               photo ? "has-photo" : "is-empty",
@@ -80,7 +101,10 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
             draggable={interactive && photo !== null}
             onDragStart={(event) => {
               if (!interactive || !photo) return;
-              beginPhotoDrag(globalIndex, event.dataTransfer);
+              const owner = groups.find((item) => item.photos.some((candidate) => candidate.id === photo.id));
+              const index = owner?.photos.findIndex((candidate) => candidate.id === photo.id) ?? -1;
+              if (!owner || index < 0) return;
+              beginPhotoDrag(index, event.dataTransfer, owner.id);
               setSelectedId(photo.id);
             }}
             onDragEnd={() => {
@@ -102,14 +126,21 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
               if (files.length > 0) {
                 endPhotoDrag();
                 if (photo) void replaceWithFiles(photo.id, files);
-                else void insertFiles(globalIndex, files);
+                else void insertFiles(photos.length, files);
                 return;
               }
               const from = photoDragIndex();
+              const fromGroup = photoDragGroupId();
               endPhotoDrag();
-              if (from === null || from === globalIndex) return;
-              if (globalIndex >= state.photos.length) movePhotoToEnd(from);
-              else swapPhotos(from, globalIndex);
+              if (from === null || !fromGroup) return;
+              if (!photo) {
+                movePhotoToEnd(from, fromGroup);
+                return;
+              }
+              const owner = groups.find((item) => item.photos.some((candidate) => candidate.id === photo.id));
+              const target = owner?.photos.findIndex((candidate) => candidate.id === photo.id) ?? -1;
+              if (!owner || target < 0 || owner.id !== fromGroup || target === from) return;
+              swapPhotos(from, target, owner.id);
             }}
             onClick={() => {
               if (photo) setSelectedId(photo.id);
@@ -118,9 +149,12 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
             {photo && (
               <img
                 src={photo.url}
-                alt={photo.name}
+                alt=""
                 draggable={false}
                 style={{ objectFit: settings.fit }}
+                onError={(event) => {
+                  if (event.currentTarget.src !== photo.thumbUrl) event.currentTarget.src = photo.thumbUrl;
+                }}
               />
             )}
             {interactive && <span className="cell-index">{globalIndex + 1}</span>}
@@ -136,7 +170,7 @@ export function A4Page({ slots, pageIndex, interactive }: A4PageProps) {
                     </button>
                   </>
                 ) : (
-                  <button type="button" onClick={() => openInsert(globalIndex)}>
+                  <button type="button" onClick={() => openInsert(photos.length)}>
                     Ajouter ici
                   </button>
                 )}
